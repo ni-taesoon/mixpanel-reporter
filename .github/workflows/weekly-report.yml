@@ -1,0 +1,64 @@
+name: 주간 리포트 발송
+
+on:
+  schedule:
+    # 매일 KST 오전 8시 (UTC 23:00 전날)
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+    inputs:
+      weeks:
+        description: '리포트 기간 (주 수)'
+        required: false
+        default: '2'
+
+env:
+  WEEKS: ${{ github.event.inputs.weeks || '2' }}
+
+jobs:
+  send-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Python 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: emails/package-lock.json
+
+      - name: Node.js 의존성 설치
+        run: npm ci
+        working-directory: emails
+
+      - name: Mixpanel 데이터 수집
+        env:
+          MIXPANEL_USERNAME: ${{ secrets.MIXPANEL_USERNAME }}
+          MIXPANEL_PASSWORD: ${{ secrets.MIXPANEL_PASSWORD }}
+          MIXPANEL_PROJECT_ID: ${{ secrets.MIXPANEL_PROJECT_ID }}
+        run: python3 fetch_data.py --weeks ${{ env.WEEKS }}
+
+      - name: 분석 리포트 생성
+        run: python3 main.py report > emails/report-data.json
+
+      - name: 이메일 발송
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: npx tsx src/send.ts
+        working-directory: emails
