@@ -1,0 +1,7 @@
+.env
+emails/node_modules/
+emails/report-data.json
+emails/report.html
+emails/.react-email/
+__pycache__/
+*.pyc
