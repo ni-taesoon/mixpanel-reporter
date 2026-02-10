@@ -57,7 +57,20 @@ export const Header: React.FC<HeaderProps> = ({ from, to }) => {
                         lineHeight: "1.2",
                       }}
                     >
-                      {label}
+                      {label}{" "}
+                      <span
+                        style={{
+                          backgroundColor: "rgba(59, 130, 246, 0.15)",
+                          color: "#93c5fd",
+                          padding: "2px 10px",
+                          borderRadius: "4px",
+                          fontSize: "13px",
+                          fontWeight: "500",
+                          verticalAlign: "middle",
+                        }}
+                      >
+                        @jiran.com
+                      </span>
                     </Text>
                     <Text
                       style={{
