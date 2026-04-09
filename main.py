@@ -70,9 +70,20 @@ def print_basic_stats(df: pd.DataFrame) -> None:
         print(df["$city"].value_counts().head(10).to_string())
 
 
+EXCLUDED_DOMAINS = {"jiran.com", "nextintelligence.ai", "test.com", "test2.com", "test4.com"}
+
+
 def _filter_jiran(df: pd.DataFrame) -> pd.DataFrame:
     """distinct_id가 @jiran.com인 행만 반환한다."""
     return df[df["distinct_id"].str.contains("@jiran.com", na=False)]
+
+
+def _filter_external(df: pd.DataFrame) -> pd.DataFrame:
+    """제외 도메인(jiran.com, nextintelligence.ai, test*)을 뺀 외부 사용자 행만 반환한다."""
+    mask = df["distinct_id"].str.contains("@", na=False)
+    filtered = df[mask].copy()
+    filtered["_domain"] = filtered["distinct_id"].str.split("@").str[1]
+    return filtered[~filtered["_domain"].isin(EXCLUDED_DOMAINS)]
 
 
 def _fill_missing_dates(daily: pd.DataFrame, min_date, max_date) -> pd.DataFrame:
@@ -419,15 +430,18 @@ def print_message_sent_daily(df: pd.DataFrame, min_date=None, max_date=None) -> 
     _print_tsv(daily)
 
 
-def _build_report_data(df: pd.DataFrame, min_date, max_date) -> dict:
-    """모든 분석 결과를 JSON-직렬화 가능한 dict로 반환한다."""
-    jiran = _filter_jiran(df)
-    chats = jiran[jiran["event"] == "chat_started"]
-    msgs = jiran[jiran["event"] == "message_sent"].copy()
+def _analyze_subset(subset: pd.DataFrame, min_date, max_date) -> dict:
+    """임의의 DataFrame 서브셋에 대해 전체 분석을 수행하여 dict로 반환한다."""
+    chats = subset[subset["event"] == "chat_started"]
+    msgs = subset[subset["event"] == "message_sent"].copy()
     msgs["date"] = msgs["timestamp"].dt.date
 
-    attach_sessions = set(chats.loc[chats["has_attachments"] == True, "session_id"])
-    agent_sessions = set(chats.loc[chats["agent_id"].notna(), "session_id"])
+    attach_sessions = set(
+        chats.loc[chats["has_attachments"] == True, "session_id"]
+    ) if "has_attachments" in chats.columns and not chats.empty else set()
+    agent_sessions = set(
+        chats.loc[chats["agent_id"].notna(), "session_id"]
+    ) if "agent_id" in chats.columns and not chats.empty else set()
 
     def classify(row):
         tools = row.get("tools_used")
@@ -443,21 +457,23 @@ def _build_report_data(df: pd.DataFrame, min_date, max_date) -> dict:
             return "에이전트"
         return "일반"
 
-    msgs["category"] = msgs.apply(classify, axis=1)
     categories = ["웹", "이메일", "문서", "에이전트", "일반"]
     all_dates = pd.date_range(start=min_date, end=max_date, freq="D").date
+
+    if not msgs.empty:
+        msgs["category"] = msgs.apply(classify, axis=1)
 
     # --- 카테고리별 통합 ---
     cat_rows = []
     for d in all_dates:
-        day_msgs = msgs[msgs["date"] == d]
+        day_msgs = msgs[msgs["date"] == d] if not msgs.empty else msgs
         row = {"date": str(d)}
         total_count = 0
         all_users = set()
         for cat in categories:
-            cat_msgs = day_msgs[day_msgs["category"] == cat]
+            cat_msgs = day_msgs[day_msgs["category"] == cat] if not msgs.empty else day_msgs
             cnt = len(cat_msgs)
-            users = set(cat_msgs["distinct_id"].dropna())
+            users = set(cat_msgs["distinct_id"].dropna()) if cnt > 0 else set()
             row[cat] = {"count": cnt, "users": len(users)}
             total_count += cnt
             all_users |= users
@@ -467,78 +483,82 @@ def _build_report_data(df: pd.DataFrame, min_date, max_date) -> dict:
     # --- 일별 메시지 ---
     msg_daily_rows = []
     for d in all_dates:
-        day = msgs[msgs["date"] == d]
+        day = msgs[msgs["date"] == d] if not msgs.empty else msgs
         msg_daily_rows.append({
             "date": str(d),
             "count": len(day),
-            "users": int(day["distinct_id"].nunique()),
+            "users": int(day["distinct_id"].nunique()) if not day.empty else 0,
         })
 
     # --- 세션당 평균 멀티턴 ---
-    per_session = (
-        msgs.groupby(["date", "session_id"]).size()
-        .reset_index(name="msg_count")
-    )
     avg_rows = []
-    for d in all_dates:
-        ds = per_session[per_session["date"] == d]
-        avg_rows.append({
-            "date": str(d),
-            "sessions": int(ds["session_id"].nunique()) if not ds.empty else 0,
-            "messages": int(ds["msg_count"].sum()) if not ds.empty else 0,
-            "avg": round(float(ds["msg_count"].mean()), 1) if not ds.empty else 0,
-        })
+    if not msgs.empty:
+        per_session = (
+            msgs.groupby(["date", "session_id"]).size()
+            .reset_index(name="msg_count")
+        )
+        for d in all_dates:
+            ds = per_session[per_session["date"] == d]
+            avg_rows.append({
+                "date": str(d),
+                "sessions": int(ds["session_id"].nunique()) if not ds.empty else 0,
+                "messages": int(ds["msg_count"].sum()) if not ds.empty else 0,
+                "avg": round(float(ds["msg_count"].mean()), 1) if not ds.empty else 0,
+            })
+    else:
+        for d in all_dates:
+            avg_rows.append({"date": str(d), "sessions": 0, "messages": 0, "avg": 0})
 
     # --- 웹 검색 일별 ---
     def has_web_search(val):
         return isinstance(val, list) and "web_search" in val
 
-    web_msgs = msgs[msgs["tools_used"].apply(has_web_search)]
+    web_msgs = msgs[msgs["tools_used"].apply(has_web_search)] if not msgs.empty else msgs
     web_rows = []
     for d in all_dates:
-        day = web_msgs[web_msgs["date"] == d]
+        day = web_msgs[web_msgs["date"] == d] if not web_msgs.empty else web_msgs
         web_rows.append({
             "date": str(d),
             "count": len(day),
-            "users": int(day["distinct_id"].nunique()),
+            "users": int(day["distinct_id"].nunique()) if not day.empty else 0,
         })
 
     # --- 이메일 일별 ---
     def has_email(val):
         return isinstance(val, list) and "email" in val
 
-    email_msgs = msgs[msgs["tools_used"].apply(has_email)]
+    email_msgs = msgs[msgs["tools_used"].apply(has_email)] if not msgs.empty else msgs
     email_rows = []
     for d in all_dates:
-        day = email_msgs[email_msgs["date"] == d]
+        day = email_msgs[email_msgs["date"] == d] if not email_msgs.empty else email_msgs
         email_rows.append({
             "date": str(d),
             "count": len(day),
-            "users": int(day["distinct_id"].nunique()),
+            "users": int(day["distinct_id"].nunique()) if not day.empty else 0,
         })
 
     # --- 첨부파일(문서) 일별 ---
-    attach_msg = msgs[msgs["session_id"].isin(attach_sessions)]
+    attach_msg = msgs[msgs["session_id"].isin(attach_sessions)] if not msgs.empty else msgs
     attach_rows = []
     for d in all_dates:
-        day = attach_msg[attach_msg["date"] == d]
+        day = attach_msg[attach_msg["date"] == d] if not attach_msg.empty else attach_msg
         attach_rows.append({
             "date": str(d),
             "messages": len(day),
-            "sessions": int(day["session_id"].nunique()),
-            "users": int(day["distinct_id"].nunique()),
+            "sessions": int(day["session_id"].nunique()) if not day.empty else 0,
+            "users": int(day["distinct_id"].nunique()) if not day.empty else 0,
         })
 
     # --- 에이전트 일별 ---
-    agent_msg = msgs[msgs["session_id"].isin(agent_sessions)]
+    agent_msg = msgs[msgs["session_id"].isin(agent_sessions)] if not msgs.empty else msgs
     agent_rows = []
     for d in all_dates:
-        day = agent_msg[agent_msg["date"] == d]
+        day = agent_msg[agent_msg["date"] == d] if not agent_msg.empty else agent_msg
         agent_rows.append({
             "date": str(d),
             "messages": len(day),
-            "sessions": int(day["session_id"].nunique()),
-            "users": int(day["distinct_id"].nunique()),
+            "sessions": int(day["session_id"].nunique()) if not day.empty else 0,
+            "users": int(day["distinct_id"].nunique()) if not day.empty else 0,
         })
 
     # --- 일반 채팅 일별 ---
@@ -547,20 +567,23 @@ def _build_report_data(df: pd.DataFrame, min_date, max_date) -> dict:
             return "web_search" not in val and "email" not in val
         return True
 
-    plain_msgs = msgs[msgs["tools_used"].apply(no_special_tools)]
-    plain_msgs = plain_msgs[~plain_msgs["session_id"].isin(attach_sessions)]
-    plain_msgs = plain_msgs[~plain_msgs["session_id"].isin(agent_sessions)]
+    if not msgs.empty:
+        plain_msgs = msgs[msgs["tools_used"].apply(no_special_tools)]
+        plain_msgs = plain_msgs[~plain_msgs["session_id"].isin(attach_sessions)]
+        plain_msgs = plain_msgs[~plain_msgs["session_id"].isin(agent_sessions)]
+    else:
+        plain_msgs = msgs
     plain_rows = []
     for d in all_dates:
-        day = plain_msgs[plain_msgs["date"] == d]
+        day = plain_msgs[plain_msgs["date"] == d] if not plain_msgs.empty else plain_msgs
         plain_rows.append({
             "date": str(d),
             "count": len(day),
-            "users": int(day["distinct_id"].nunique()),
+            "users": int(day["distinct_id"].nunique()) if not day.empty else 0,
         })
 
     # --- 피드백 ---
-    fb = jiran[jiran["event"] == "feedback_submitted"].copy()
+    fb = subset[subset["event"] == "feedback_submitted"].copy()
     fb_rows = []
     if not fb.empty:
         fb["date"] = fb["timestamp"].dt.date
@@ -573,7 +596,6 @@ def _build_report_data(df: pd.DataFrame, min_date, max_date) -> dict:
             })
 
     return {
-        "period": {"from": str(min_date), "to": str(max_date)},
         "category_summary": cat_rows,
         "message_daily": msg_daily_rows,
         "avg_multiturn": avg_rows,
@@ -584,6 +606,36 @@ def _build_report_data(df: pd.DataFrame, min_date, max_date) -> dict:
         "plain_daily": plain_rows,
         "feedback": fb_rows,
     }
+
+
+def _build_report_data(df: pd.DataFrame, min_date, max_date) -> dict:
+    """@jiran.com 사용자의 전체 분석 결과를 dict로 반환한다."""
+    jiran = _filter_jiran(df)
+    result = _analyze_subset(jiran, min_date, max_date)
+    result["period"] = {"from": str(min_date), "to": str(max_date)}
+    return result
+
+
+def _build_external_report_data(df: pd.DataFrame, min_date, max_date) -> list:
+    """외부 도메인 사용자 데이터를 도메인별로 분석하여 리스트로 반환한다."""
+    ext = _filter_external(df)
+    if ext.empty:
+        return []
+
+    domains = sorted(ext["_domain"].unique())
+    result = []
+    for domain in domains:
+        domain_df = ext[ext["_domain"] == domain]
+        users = sorted(domain_df["distinct_id"].unique().tolist())
+
+        analysis = _analyze_subset(domain_df, min_date, max_date)
+        analysis["domain"] = domain
+        analysis["users"] = users
+        analysis["total_users"] = len(users)
+        result.append(analysis)
+
+    result.sort(key=lambda x: sum(r["total"]["count"] for r in x["category_summary"]), reverse=True)
+    return result
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -605,7 +657,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("plain-msg", help="일반 채팅 일별 통계 - 웹/이메일/문서/에이전트 미사용 (@jiran.com)")
     sub.add_parser("category", help="카테고리별 통합 통계 (@jiran.com)")
     sub.add_parser("all", help="모든 분석 실행")
-    sub.add_parser("report", help="전체 분석 결과를 JSON으로 출력")
+    sub.add_parser("report", help="전체 분석 결과를 JSON으로 출력 (@jiran.com)")
+    sub.add_parser("external-report", help="외부 도메인 분석 결과를 JSON으로 출력")
 
     return parser
 
@@ -637,6 +690,13 @@ def main() -> None:
 
     if args.command == "report":
         report = _build_report_data(df, min_date, max_date)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    elif args.command == "external-report":
+        ext = _build_external_report_data(df, min_date, max_date)
+        report = {
+            "period": {"from": str(min_date), "to": str(max_date)},
+            "domains": ext,
+        }
         print(json.dumps(report, ensure_ascii=False, indent=2))
     elif args.command == "all":
         for name, fn in COMMANDS.items():
