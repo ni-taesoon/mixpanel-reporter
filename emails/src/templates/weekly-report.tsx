@@ -14,6 +14,7 @@ interface WeeklyReportProps {
 
 const CATEGORIES = ["웹", "이메일", "문서", "에이전트", "일반"] as const;
 
+
 const CAT_COLORS: Record<string, string> = {
   웹: "#3b82f6",
   이메일: "#8b5cf6",
@@ -276,5 +277,6 @@ const container = {
   overflow: "hidden" as const,
   boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
 };
+
 
 export default WeeklyReport;

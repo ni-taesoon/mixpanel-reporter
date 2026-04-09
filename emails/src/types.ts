@@ -45,3 +45,23 @@ export interface ReportData {
   plain_daily: DailyRow[];
   feedback: DailyRow[];
 }
+
+export interface ExternalDomainData {
+  domain: string;
+  users: string[];
+  total_users: number;
+  category_summary: CategoryRow[];
+  message_daily: DailyRow[];
+  avg_multiturn: AvgMultiturnRow[];
+  web_search_daily: DailyRow[];
+  email_daily: DailyRow[];
+  attachment_daily: SessionDailyRow[];
+  agent_daily: SessionDailyRow[];
+  plain_daily: DailyRow[];
+  feedback: DailyRow[];
+}
+
+export interface ExternalReportData {
+  period: { from: string; to: string };
+  domains: ExternalDomainData[];
+}

@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import nodemailer from "nodemailer";
 import { config } from "dotenv";
 import { WeeklyReport } from "./templates/weekly-report.js";
-import type { ReportData } from "./types.js";
+import { ExternalReport } from "./templates/external-report.js";
+import type { ReportData, ExternalReportData } from "./types.js";
 import React from "react";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -26,13 +27,32 @@ if (!SMTP_HOST || !MAIL_FROM || !MAIL_TO) {
   process.exit(1);
 }
 
-const inputPath = process.argv[2] || path.join(__dirname, "..", "report-data.json");
+const mode = process.argv[2] === "external" ? "external" : "internal";
+const defaultInput =
+  mode === "external"
+    ? path.join(__dirname, "..", "external-report-data.json")
+    : path.join(__dirname, "..", "report-data.json");
+const inputPath =
+  mode === "external"
+    ? process.argv[3] || defaultInput
+    : process.argv[2] || defaultInput;
 
 const raw = fs.readFileSync(inputPath, "utf-8");
-const data: ReportData = JSON.parse(raw);
 
-console.log("이메일 렌더링 중...");
-const html = await render(React.createElement(WeeklyReport, { data }));
+let html: string;
+let subject: string;
+
+if (mode === "external") {
+  const data: ExternalReportData = JSON.parse(raw);
+  console.log("외부 도메인 리포트 렌더링 중...");
+  html = await render(React.createElement(ExternalReport, { data }));
+  subject = `OfficeAgent 외부 도메인 리포트 (${data.period.from} ~ ${data.period.to})`;
+} else {
+  const data: ReportData = JSON.parse(raw);
+  console.log("이메일 렌더링 중...");
+  html = await render(React.createElement(WeeklyReport, { data }));
+  subject = `OfficeAgent 주간 리포트 (${data.period.from} ~ ${data.period.to})`;
+}
 
 const transporter = nodemailer.createTransport({
   host: SMTP_HOST,
@@ -42,8 +62,6 @@ const transporter = nodemailer.createTransport({
     ? { user: SMTP_USER, pass: SMTP_PASS }
     : undefined,
 });
-
-const subject = `OfficeAgent 주간 리포트 (${data.period.from} ~ ${data.period.to})`;
 
 console.log(`발송 중: ${MAIL_FROM} → ${MAIL_TO}`);
 
