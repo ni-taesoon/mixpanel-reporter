@@ -1,0 +1,97 @@
+name: 일간 Raw 데이터 첨부 발송
+
+on:
+  schedule:
+    # 매일 KST 오전 8시 (UTC 전일 23:00)
+    - cron: '0 23 * * *'
+  workflow_dispatch:
+    inputs:
+      from_date:
+        description: '시작일 (KST, yyyy-mm-dd). 비우면 오늘-6일'
+        required: false
+      to_date:
+        description: '종료일 (KST, yyyy-mm-dd). 비우면 오늘'
+        required: false
+
+jobs:
+  send-raw:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Python 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: emails/package-lock.json
+
+      - name: Node.js 의존성 설치
+        run: npm ci
+        working-directory: emails
+
+      - name: KST 기간 계산
+        id: period
+        run: |
+          if [ -n "${{ github.event.inputs.to_date }}" ]; then
+            TO_DATE="${{ github.event.inputs.to_date }}"
+          else
+            TO_DATE=$(TZ=Asia/Seoul date +%F)
+          fi
+          if [ -n "${{ github.event.inputs.from_date }}" ]; then
+            FROM_DATE="${{ github.event.inputs.from_date }}"
+          else
+            FROM_DATE=$(TZ=Asia/Seoul date -d '6 days ago' +%F)
+          fi
+          echo "from_date=$FROM_DATE" >> "$GITHUB_OUTPUT"
+          echo "to_date=$TO_DATE" >> "$GITHUB_OUTPUT"
+          echo "기간: $FROM_DATE ~ $TO_DATE (KST)"
+
+      - name: Mixpanel raw 데이터 수집
+        env:
+          MIXPANEL_USERNAME: ${{ secrets.MIXPANEL_USERNAME }}
+          MIXPANEL_PASSWORD: ${{ secrets.MIXPANEL_PASSWORD }}
+          MIXPANEL_PROJECT_ID: ${{ secrets.MIXPANEL_PROJECT_ID }}
+        run: |
+          python3 fetch_data.py \
+            --from "${{ steps.period.outputs.from_date }}" \
+            --to "${{ steps.period.outputs.to_date }}" \
+            -o emails/raw-export.jsonl
+
+      - name: 이벤트 수 계산 및 gzip 압축
+        id: archive
+        run: |
+          TO_DATE="${{ steps.period.outputs.to_date }}"
+          COUNT=$(wc -l < emails/raw-export.jsonl | tr -d ' ')
+          FILENAME="mixpanel-raw-${TO_DATE}.jsonl.gz"
+          gzip -c emails/raw-export.jsonl > "emails/${FILENAME}"
+          echo "filename=${FILENAME}" >> "$GITHUB_OUTPUT"
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+          ls -lh "emails/${FILENAME}"
+
+      - name: 첨부 이메일 발송
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          RAW_DATA_MAIL_FROM: ${{ secrets.RAW_DATA_MAIL_FROM || '리포트 <noreply@officemail.app>' }}
+          RAW_DATA_MAIL_TO: ${{ secrets.RAW_DATA_MAIL_TO || 'taesoon.park@jiran.com' }}
+          RAW_FROM: ${{ steps.period.outputs.from_date }}
+          RAW_TO: ${{ steps.period.outputs.to_date }}
+          RAW_FILE: ${{ steps.archive.outputs.filename }}
+          RAW_EVENT_COUNT: ${{ steps.archive.outputs.count }}
+        run: npx tsx src/send-raw.ts
+        working-directory: emails
