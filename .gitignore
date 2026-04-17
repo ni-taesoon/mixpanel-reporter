@@ -2,6 +2,10 @@
 emails/node_modules/
 emails/report-data.json
 emails/report.html
+emails/external-report-data.json
+emails/external-report.html
+emails/raw-export.jsonl
+emails/mixpanel-raw-*.jsonl.gz
 emails/.react-email/
 __pycache__/
 *.pyc

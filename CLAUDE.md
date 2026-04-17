@@ -35,6 +35,9 @@ cd emails && npx tsx src/send.ts     # JSON → HTML → SMTP send
 cd emails && npm run preview         # react.email dev preview
 ```
 
+### Daily raw data attachment (독립 파이프라인)
+매일 KST 08시 (`.github/workflows/daily-raw-export.yml`) 최근 7일 raw JSONL을 gzip 압축 후 `RAW_DATA_MAIL_TO`로 첨부 발송. 발송 스크립트: `emails/src/send-raw.ts` (env: `RAW_FROM`, `RAW_TO`, `RAW_FILE`, `RAW_EVENT_COUNT`).
+
 ## Architecture
 
 4-phase pipeline, orchestrated by `run-report.sh`:
@@ -63,7 +66,7 @@ Phase 4: send.ts          HTML → nodemailer → SMTP delivery
 ## Environment Variables
 
 - Root `.env`: `MIXPANEL_USERNAME`, `MIXPANEL_PASSWORD`, `MIXPANEL_PROJECT_ID`
-- `emails/.env`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `MAIL_TO`
+- `emails/.env`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `MAIL_TO`, `RAW_DATA_MAIL_TO`
 
 ## Key Technical Decisions
 
