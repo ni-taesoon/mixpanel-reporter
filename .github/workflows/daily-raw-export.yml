@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       from_date:
-        description: '시작일 (KST, yyyy-mm-dd). 비우면 오늘-6일'
+        description: '시작일 (yyyy-mm-dd). 비우면 오늘-6일'
         required: false
       to_date:
-        description: '종료일 (KST, yyyy-mm-dd). 비우면 오늘'
+        description: '종료일 (yyyy-mm-dd). 비우면 오늘'
         required: false
 
 jobs:
@@ -41,22 +41,39 @@ jobs:
         run: npm ci
         working-directory: emails
 
-      - name: KST 기간 계산
+      - name: 기간 계산 (API는 UTC, 표시는 KST)
         id: period
         run: |
+          # API 요청용 (UTC — Mixpanel Export API가 요구)
           if [ -n "${{ github.event.inputs.to_date }}" ]; then
-            TO_DATE="${{ github.event.inputs.to_date }}"
+            UTC_TO="${{ github.event.inputs.to_date }}"
           else
-            TO_DATE=$(TZ=Asia/Seoul date +%F)
+            UTC_TO=$(date -u +%F)
           fi
           if [ -n "${{ github.event.inputs.from_date }}" ]; then
-            FROM_DATE="${{ github.event.inputs.from_date }}"
+            UTC_FROM="${{ github.event.inputs.from_date }}"
           else
-            FROM_DATE=$(TZ=Asia/Seoul date -d '6 days ago' +%F)
+            UTC_FROM=$(date -u -d '6 days ago' +%F)
           fi
-          echo "from_date=$FROM_DATE" >> "$GITHUB_OUTPUT"
-          echo "to_date=$TO_DATE" >> "$GITHUB_OUTPUT"
-          echo "기간: $FROM_DATE ~ $TO_DATE (KST)"
+
+          # 표시용 (KST — 이메일 제목/본문/파일명)
+          if [ -n "${{ github.event.inputs.to_date }}" ]; then
+            KST_TO="${{ github.event.inputs.to_date }}"
+          else
+            KST_TO=$(TZ=Asia/Seoul date +%F)
+          fi
+          if [ -n "${{ github.event.inputs.from_date }}" ]; then
+            KST_FROM="${{ github.event.inputs.from_date }}"
+          else
+            KST_FROM=$(TZ=Asia/Seoul date -d '6 days ago' +%F)
+          fi
+
+          echo "utc_from=$UTC_FROM" >> "$GITHUB_OUTPUT"
+          echo "utc_to=$UTC_TO" >> "$GITHUB_OUTPUT"
+          echo "kst_from=$KST_FROM" >> "$GITHUB_OUTPUT"
+          echo "kst_to=$KST_TO" >> "$GITHUB_OUTPUT"
+          echo "API 기간 (UTC): $UTC_FROM ~ $UTC_TO"
+          echo "표시 기간 (KST): $KST_FROM ~ $KST_TO"
 
       - name: Mixpanel raw 데이터 수집
         env:
@@ -65,14 +82,14 @@ jobs:
           MIXPANEL_PROJECT_ID: ${{ secrets.MIXPANEL_PROJECT_ID }}
         run: |
           python3 fetch_data.py \
-            --from "${{ steps.period.outputs.from_date }}" \
-            --to "${{ steps.period.outputs.to_date }}" \
+            --from "${{ steps.period.outputs.utc_from }}" \
+            --to "${{ steps.period.outputs.utc_to }}" \
             -o emails/raw-export.jsonl
 
       - name: 이벤트 수 계산 및 gzip 압축
         id: archive
         run: |
-          TO_DATE="${{ steps.period.outputs.to_date }}"
+          TO_DATE="${{ steps.period.outputs.kst_to }}"
           COUNT=$(wc -l < emails/raw-export.jsonl | tr -d ' ')
           FILENAME="mixpanel-raw-${TO_DATE}.jsonl.gz"
           gzip -c emails/raw-export.jsonl > "emails/${FILENAME}"
@@ -89,8 +106,8 @@ jobs:
           MAIL_FROM: ${{ secrets.MAIL_FROM }}
           RAW_DATA_MAIL_FROM: ${{ secrets.RAW_DATA_MAIL_FROM || '리포트 <noreply@officemail.app>' }}
           RAW_DATA_MAIL_TO: ${{ secrets.RAW_DATA_MAIL_TO || 'taesoon.park@jiran.com' }}
-          RAW_FROM: ${{ steps.period.outputs.from_date }}
-          RAW_TO: ${{ steps.period.outputs.to_date }}
+          RAW_FROM: ${{ steps.period.outputs.kst_from }}
+          RAW_TO: ${{ steps.period.outputs.kst_to }}
           RAW_FILE: ${{ steps.archive.outputs.filename }}
           RAW_EVENT_COUNT: ${{ steps.archive.outputs.count }}
         run: npx tsx src/send-raw.ts
