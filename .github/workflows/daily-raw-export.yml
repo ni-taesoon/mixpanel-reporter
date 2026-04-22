@@ -83,21 +83,23 @@ jobs:
         run: |
           python3 fetch_data.py \
             --from "${{ steps.period.outputs.utc_from }}" \
-            --to "${{ steps.period.outputs.utc_to }}" \
-            -o emails/raw-export.jsonl
+            --to "${{ steps.period.outputs.utc_to }}"
 
       - name: 이벤트 수 계산 및 gzip 압축
         id: archive
         run: |
           TO_DATE="${{ steps.period.outputs.kst_to }}"
-          COUNT=$(wc -l < emails/raw-export.jsonl | tr -d ' ')
+          COUNT=$(wc -l < mixpanel-data.jsonb | tr -d ' ')
           FILENAME="mixpanel-raw-${TO_DATE}.jsonl.gz"
-          gzip -c emails/raw-export.jsonl > "emails/${FILENAME}"
+          gzip -c mixpanel-data.jsonb > "emails/${FILENAME}"
           echo "filename=${FILENAME}" >> "$GITHUB_OUTPUT"
           echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
           ls -lh "emails/${FILENAME}"
 
-      - name: 첨부 이메일 발송
+      - name: 외부 도메인 리포트 생성
+        run: python3 main.py external-report > emails/external-report-data.json
+
+      - name: 첨부 이메일 발송 (외부 도메인 리포트 + Raw 첨부)
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -110,5 +112,6 @@ jobs:
           RAW_TO: ${{ steps.period.outputs.kst_to }}
           RAW_FILE: ${{ steps.archive.outputs.filename }}
           RAW_EVENT_COUNT: ${{ steps.archive.outputs.count }}
+          RAW_EXTERNAL_REPORT: external-report-data.json
         run: npx tsx src/send-raw.ts
         working-directory: emails
