@@ -3,7 +3,7 @@
 import argparse
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -45,13 +45,16 @@ def fetch_events(from_date: str, to_date: str) -> str:
         print("오류: Rate limit 초과. 잠시 후 다시 시도하세요.", file=sys.stderr)
         sys.exit(1)
 
+    if not resp.ok:
+        print(f"Mixpanel API 응답 본문: {resp.text[:500]}", file=sys.stderr)
+
     resp.raise_for_status()
     return resp.text
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mixpanel 데이터 다운로드")
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
 
     parser.add_argument("-w", "--weeks", type=int, default=2,
                         help="가져올 주 수 (기본: 2)")
